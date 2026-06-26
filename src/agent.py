@@ -7,7 +7,7 @@ import json
 import os
 from datetime import datetime
 import anthropic
-from src.tools import search, gmail, notes
+from src.tools import search, gmail, notes, outages
 
 client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
@@ -160,6 +160,17 @@ TOOLS = [
         },
     },
     {
+        "name": "check_power_outages",
+        "description": "Check planned power outages in Macedonia from Elektrodistribucija. Can filter by region (e.g. Скопје, Тетово, Охрид) and/or date (YYYY-MM-DD). If no date given, returns all upcoming outages.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "region": {"type": "string", "description": "Region name in Macedonian e.g. Скопје, Тетово, Охрид, Битола (optional)"},
+                "for_date": {"type": "string", "description": "Date filter in YYYY-MM-DD format (optional)"},
+            },
+        },
+    },
+    {
         "name": "schedule_task",
         "description": "Schedule a task to run at a specific future date and time. Use when the user says things like 'send me X at 9am', 'remind me about Y tomorrow', 'check Z every morning'.",
         "input_schema": {
@@ -231,6 +242,9 @@ def _execute_tool(name: str, inputs: dict):
             return json.dumps(result, indent=2)
         elif name == "delete_note":
             return notes.delete_note(**inputs)
+        elif name == "check_power_outages":
+            results = outages.get_outages(**inputs)
+            return outages.format_outages(results)
         elif name == "schedule_task":
             from src import scheduler
             run_at = datetime.fromisoformat(inputs["run_at"])
@@ -265,6 +279,7 @@ def chat(history: list[dict], user_message: str, user_id: int = None) -> tuple[s
     )
 
     history = history + [{"role": "user", "content": user_message}]
+    safe_history = history  # last known clean state
 
     while True:
         response = client.messages.create(
@@ -275,16 +290,15 @@ def chat(history: list[dict], user_message: str, user_id: int = None) -> tuple[s
             messages=history,
         )
 
-        # Collect text and tool use blocks
         tool_uses = [b for b in response.content if b.type == "tool_use"]
         text_blocks = [b for b in response.content if b.type == "text"]
 
-        # Append assistant turn to history
         history.append({"role": "assistant", "content": response.content})
 
         if response.stop_reason == "end_turn" or not tool_uses:
             reply = "\n".join(b.text for b in text_blocks if b.text)
-            return reply, history
+            safe_history = history  # full exchange completed cleanly
+            return reply, safe_history
 
         # Execute all tool calls and feed results back
         tool_results = []
@@ -297,3 +311,4 @@ def chat(history: list[dict], user_message: str, user_id: int = None) -> tuple[s
             })
 
         history.append({"role": "user", "content": tool_results})
+        safe_history = history  # tool results paired — safe to save up to here
