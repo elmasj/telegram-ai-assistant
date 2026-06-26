@@ -82,6 +82,36 @@ def _has_tool_use(content) -> bool:
     return False
 
 
+def _is_tool_result_block(content) -> bool:
+    if isinstance(content, list):
+        return any(
+            (c.get("type") == "tool_result" if isinstance(c, dict) else False)
+            for c in content
+        )
+    return False
+
+
+def _clean_history(history: list[dict]) -> list[dict]:
+    """
+    Remove any incomplete tool_use / tool_result pairs from history.
+    Walks backwards and drops unpaired blocks to prevent Anthropic API 400 errors.
+    """
+    clean = list(history)
+
+    # Drop trailing assistant turn with tool_use that has no following tool_result
+    while clean and clean[-1]["role"] == "assistant" and _has_tool_use(clean[-1]["content"]):
+        clean.pop()
+
+    # Drop trailing user turn that only contains tool_results (orphaned)
+    while clean and clean[-1]["role"] == "user" and _is_tool_result_block(clean[-1]["content"]):
+        clean.pop()
+        # Also drop the assistant turn before it if it had tool_use
+        if clean and clean[-1]["role"] == "assistant" and _has_tool_use(clean[-1]["content"]):
+            clean.pop()
+
+    return clean
+
+
 def save(user_id: int, history: list[dict]):
     # Serialize content that may contain Anthropic SDK objects
     serializable = []
@@ -89,19 +119,7 @@ def save(user_id: int, history: list[dict]):
         content = _serialize_content(msg["content"])
         serializable.append({"role": msg["role"], "content": content})
 
-    # Drop any trailing assistant message that ends with tool_use (no result pair saved yet)
-    # This prevents corrupted history when a tool call fails mid-flight
-    while serializable and serializable[-1]["role"] == "assistant" and _has_tool_use(serializable[-1]["content"]):
-        serializable.pop()
-        if serializable and serializable[-1]["role"] == "user":
-            last_content = serializable[-1]["content"]
-            if isinstance(last_content, list) and any(
-                (c.get("type") == "tool_result" if isinstance(c, dict) else False)
-                for c in last_content
-            ):
-                serializable.pop()
-
-    # Trim to avoid unbounded growth
+    serializable = _clean_history(serializable)
     serializable = serializable[-MAX_HISTORY:]
 
     con = _conn()
