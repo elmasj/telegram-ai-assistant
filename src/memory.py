@@ -20,8 +20,41 @@ def _conn():
             history TEXT NOT NULL DEFAULT '[]'
         )
     """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS activity_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            message TEXT NOT NULL,
+            timestamp TEXT NOT NULL
+        )
+    """)
     con.commit()
     return con
+
+
+def log_message(user_id: int, message: str):
+    from datetime import datetime
+    con = _conn()
+    con.execute(
+        "INSERT INTO activity_log (user_id, message, timestamp) VALUES (?, ?, ?)",
+        (user_id, message[:500], datetime.now().isoformat()),
+    )
+    con.commit()
+
+
+def get_user_logs(user_id: int = None, limit: int = 20) -> list[dict]:
+    con = _conn()
+    if user_id:
+        rows = con.execute(
+            "SELECT user_id, message, timestamp FROM activity_log WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()
+    else:
+        rows = con.execute(
+            "SELECT user_id, message, timestamp FROM activity_log ORDER BY timestamp DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [{"user_id": r[0], "message": r[1], "timestamp": r[2]} for r in rows]
 
 
 def load(user_id: int) -> list[dict]:

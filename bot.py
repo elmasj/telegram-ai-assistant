@@ -74,6 +74,22 @@ async def cmd_notes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await _send_long(update, reply)
 
 
+async def cmd_logs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _is_owner(update.effective_user.id):
+        return
+    # Optional: /logs <user_id> to filter by user
+    target_id = int(ctx.args[0]) if ctx.args else None
+    logs = memory.get_user_logs(user_id=target_id, limit=20)
+    if not logs:
+        await update.message.reply_text("No activity logged yet.")
+        return
+    lines = [f"📋 *Recent activity{'  for ' + str(target_id) if target_id else ''}:*\n"]
+    for entry in logs:
+        ts = entry["timestamp"][:16].replace("T", " ")
+        lines.append(f"`{ts}` [{entry['user_id']}]: {entry['message']}")
+    await _send_long(update, "\n".join(lines))
+
+
 async def cmd_adduser(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _is_owner(update.effective_user.id):
         await update.message.reply_text("Only the owner can add users.")
@@ -160,13 +176,13 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Sorry, you're not authorised to use this bot.")
         return
 
+    user_id = update.effective_user.id
     user_text = update.message.text.strip()
     if not user_text:
         return
 
+    memory.log_message(user_id, user_text)
     await update.message.reply_chat_action(ChatAction.TYPING)
-
-    user_id = update.effective_user.id
     history = memory.load(user_id)
     try:
         reply, history = agent.chat(history, user_text, user_id=user_id)
@@ -219,6 +235,7 @@ def main():
     app.add_handler(CommandHandler("tasks", cmd_tasks))
     app.add_handler(CommandHandler("restart", cmd_restart))
     app.add_handler(CommandHandler("outages", cmd_outages))
+    app.add_handler(CommandHandler("logs", cmd_logs))
     app.add_handler(CommandHandler("adduser", cmd_adduser))
     app.add_handler(CommandHandler("removeuser", cmd_removeuser))
     app.add_handler(CommandHandler("users", cmd_users))
