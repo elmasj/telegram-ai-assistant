@@ -79,14 +79,14 @@ def format_outages(outages: list[dict]) -> str:
     if not outages:
         return "No planned power outages found."
 
-    lines = [f"⚡ *{len(outages)} planned outage(s) found:*\n"]
+    lines = [f"** {len(outages)} planned outage(s) found:**\n"]
     for o in outages:
         start = datetime.fromisoformat(o["pocetok"]).strftime("%d %b %Y %H:%M")
         end = datetime.fromisoformat(o["kraj"]).strftime("%H:%M")
         lines.append(
-            f"📍 *{o['nasMesto']}*\n"
+            f"*{o['nasMesto']}*\n"
             f"   {o['adresa']}\n"
-            f"   🕐 {start} — {end}\n"
+            f"   {start} - {end}\n"
             f"   Type: {o['tipPrekin']}\n"
         )
     return "\n".join(lines)
