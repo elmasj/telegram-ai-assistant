@@ -61,7 +61,17 @@ def load(user_id: int) -> list[dict]:
     con = _conn()
     row = con.execute("SELECT history FROM chat_history WHERE user_id = ?", (user_id,)).fetchone()
     if row:
-        return json.loads(row[0])
+        history = json.loads(row[0])
+        # Validate and clean on load — auto-fix any corruption before it hits Claude
+        cleaned = _clean_history(history)
+        if len(cleaned) != len(history):
+            # Save the cleaned version back
+            con.execute(
+                "INSERT OR REPLACE INTO chat_history (user_id, history) VALUES (?, ?)",
+                (user_id, json.dumps(cleaned)),
+            )
+            con.commit()
+        return cleaned
     return []
 
 
@@ -93,19 +103,57 @@ def _is_tool_result_block(content) -> bool:
 
 def _clean_history(history: list[dict]) -> list[dict]:
     """
-    Remove any incomplete tool_use / tool_result pairs from history.
-    Walks backwards and drops unpaired blocks to prevent Anthropic API 400 errors.
+    Remove any incomplete or orphaned tool_use/tool_result pairs from history.
+    Does a full forward pass so corruption anywhere (not just the tail) is caught.
     """
-    clean = list(history)
+    # Collect tool_use IDs from all assistant messages
+    tool_use_ids: set[str] = set()
+    for msg in history:
+        if msg["role"] == "assistant":
+            content = msg["content"]
+            if isinstance(content, list):
+                for block in content:
+                    b = block if isinstance(block, dict) else block.model_dump()
+                    if b.get("type") == "tool_use":
+                        tool_use_ids.add(b["id"])
 
-    # Drop trailing assistant turn with tool_use that has no following tool_result
+    clean = []
+    i = 0
+    while i < len(history):
+        msg = history[i]
+        role = msg["role"]
+        content = msg["content"]
+
+        if role == "user" and _is_tool_result_block(content):
+            # Only keep if ALL tool_result IDs have a matching tool_use
+            if isinstance(content, list):
+                ids = [
+                    (b if isinstance(b, dict) else b.model_dump()).get("tool_use_id")
+                    for b in content
+                    if (b if isinstance(b, dict) else b.model_dump()).get("type") == "tool_result"
+                ]
+                if all(tid in tool_use_ids for tid in ids):
+                    clean.append(msg)
+                # else: orphaned tool_result block — skip it
+            i += 1
+            continue
+
+        if role == "assistant" and _has_tool_use(content):
+            # Peek ahead: must be followed by a matching tool_result user message
+            if i + 1 < len(history) and _is_tool_result_block(history[i + 1]["content"]):
+                clean.append(msg)
+            # else: tool_use with no following tool_result — drop it
+            i += 1
+            continue
+
+        clean.append(msg)
+        i += 1
+
+    # Final tail cleanup: drop trailing tool_use assistant or orphaned tool_result user
     while clean and clean[-1]["role"] == "assistant" and _has_tool_use(clean[-1]["content"]):
         clean.pop()
-
-    # Drop trailing user turn that only contains tool_results (orphaned)
     while clean and clean[-1]["role"] == "user" and _is_tool_result_block(clean[-1]["content"]):
         clean.pop()
-        # Also drop the assistant turn before it if it had tool_use
         if clean and clean[-1]["role"] == "assistant" and _has_tool_use(clean[-1]["content"]):
             clean.pop()
 
