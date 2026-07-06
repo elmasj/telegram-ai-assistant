@@ -3,6 +3,7 @@ Watchdog — keeps bot.py running. If it crashes, restarts it automatically.
 Run this instead of bot.py: python watchdog.py
 """
 
+import os
 import subprocess
 import sys
 import time
@@ -21,10 +22,13 @@ RESTART_DELAY = 5  # seconds to wait before restarting after a crash
 def run():
     while True:
         logger.info("Starting bot.py...")
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "1"
         process = subprocess.Popen(
-            [sys.executable, "bot.py"],
+            [sys.executable, "-X", "utf8", "bot.py"],
             stdout=sys.stdout,
             stderr=sys.stderr,
+            env=env,
         )
         exit_code = process.wait()
 
